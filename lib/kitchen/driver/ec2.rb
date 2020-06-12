@@ -393,22 +393,26 @@ module Kitchen
         end
         instance_data[:min_count] = 1
         instance_data[:max_count] = 1
+        apply_tags_to_instance_data(instance_data)
+        ec2.create_instance(instance_data)
+      end
+
+      def apply_tags_to_instance_data(instance_data)
         if config[:tags] && !config[:tags].empty?
           tags = config[:tags].map do |k, v|
-            { :key => k, :value => v }
+            { key: k, value: v }
           end
           instance_data[:tag_specifications] = [
             {
               resource_type: "instance",
-              tags: tags
+              tags: tags,
             },
             {
               resource_type: "volume",
-              tags: tags
-            }
+              tags: tags,
+            },
           ]
         end
-        ec2.create_instance(instance_data)
       end
 
       def config
@@ -490,9 +494,11 @@ module Kitchen
         else
           spot_price = config_spot_price
         end
+        instance_data = instance_generator.ec2_instance_data
+        apply_tags_to_instance_data(instance_data)
         request_data = {
           spot_price: spot_price,
-          launch_specification: instance_generator.ec2_instance_data,
+          launch_specification: instance_data,
           valid_until: Time.now + request_duration,
         }
         if config[:block_duration_minutes]
