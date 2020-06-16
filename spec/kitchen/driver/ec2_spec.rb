@@ -35,6 +35,18 @@ describe Kitchen::Driver::Ec2 do
       security_group_ids: ["sg-56789"],
     }
   end
+  let(:tag_spec) do
+    [
+      {
+        resource_type: "instance",
+        tags: [ { key: "created-by", value: "test-kitchen" } ],
+      },
+      {
+        resource_type: "volume",
+        tags: [ { key: "created-by", value: "test-kitchen" } ],
+      },
+    ]
+  end
   let(:platform)      { Kitchen::Platform.new(name: "fooos-99") }
   let(:transport)     { Kitchen::Transport::Dummy.new }
   let(:provisioner)   { Kitchen::Provisioner::Dummy.new }
@@ -230,7 +242,7 @@ describe Kitchen::Driver::Ec2 do
 
     it "submits the server request" do
       expect(generator).to receive(:ec2_instance_data).and_return({})
-      expect(client).to receive(:create_instance).with(min_count: 1, max_count: 1)
+      expect(client).to receive(:create_instance).with(min_count: 1, max_count: 1, tag_specifications: tag_spec)
       driver.submit_server
     end
   end
@@ -246,7 +258,7 @@ describe Kitchen::Driver::Ec2 do
         instance_initiated_shutdown_behavior: "terminate"
       )
       expect(client).to receive(:create_instance).with(
-        min_count: 1, max_count: 1, instance_initiated_shutdown_behavior: "terminate"
+        min_count: 1, max_count: 1, instance_initiated_shutdown_behavior: "terminate", tag_specifications: tag_spec
       )
       driver.submit_server
     end
@@ -267,7 +279,7 @@ describe Kitchen::Driver::Ec2 do
       expect(generator).to receive(:ec2_instance_data).and_return({})
       expect(actual_client).to receive(:request_spot_instances).with(
         spot_price: "",
-        launch_specification: {},
+        launch_specification: { tag_specifications: tag_spec },
         valid_until: Time.now + config[:spot_wait],
         block_duration_minutes: 60
       ).and_return(response)
@@ -317,40 +329,6 @@ describe Kitchen::Driver::Ec2 do
         expect(aws_instance).to receive(:exists?).and_return(true)
         expect(aws_instance).to receive_message_chain("state.name").and_return("running")
         expect(driver.wait_until_ready(server, state)).to eq(true)
-      end
-    end
-  end
-
-  describe "#wait_until_volumes_ready" do
-    let(:aws_instance) { double("aws instance") }
-    let(:msg) { "volumes to be ready" }
-    let(:volume) { double("aws volume resource") }
-
-    before do
-      expect(driver).to receive(:wait_with_destroy).with(server, state, msg).and_yield(aws_instance)
-    end
-    it "first checks instance existence" do
-      expect(aws_instance).to receive(:exists?).and_return(false)
-      expect(driver.wait_until_volumes_ready(server, state)).to eq(false)
-    end
-    it "second, it checks for prescence of described volumes" do
-      expect(aws_instance).to receive(:exists?).and_return(true)
-      expect(actual_client).to receive_message_chain(:describe_volumes, :volumes, :length).and_return(0)
-      expect(aws_instance).to receive(:volumes).and_return([])
-      expect(driver.wait_until_volumes_ready(server, state)).to eq(false)
-    end
-    it "third, it compares the described volumes and instance volumes" do
-      expect(aws_instance).to receive(:exists?).and_return(true)
-      expect(actual_client).to receive_message_chain(:describe_volumes, :volumes, :length).and_return(2)
-      expect(aws_instance).to receive(:volumes).and_return([volume])
-      expect(driver.wait_until_volumes_ready(server, state)).to eq(false)
-    end
-    context "when it exists, and both client and instance agree on volumes" do
-      it "returns true" do
-        expect(aws_instance).to receive(:exists?).and_return(true)
-        expect(actual_client).to receive_message_chain(:describe_volumes, :volumes, :length).and_return(1)
-        expect(aws_instance).to receive(:volumes).and_return([volume])
-        expect(driver.wait_until_volumes_ready(server, state)).to eq(true)
       end
     end
   end
@@ -456,7 +434,6 @@ describe Kitchen::Driver::Ec2 do
       it "successfully creates and tags the instance" do
         expect(server).to receive(:wait_until_exists)
         expect(driver).to receive(:update_username)
-        expect(driver).to receive(:wait_until_volumes_ready).with(server, state)
         expect(driver).to receive(:wait_until_ready).with(server, state)
         allow(actual_client).to receive(:describe_images).with({ image_ids: [server.image_id] }).and_return(ec2_stub)
         expect(transport).to receive_message_chain("connection.wait_until_ready")
@@ -521,21 +498,6 @@ describe Kitchen::Driver::Ec2 do
 
           include_examples "common create"
         end
-      end
-    end
-
-    context "instance is not ebs-backed" do
-      before do
-        ec2_stub.images[0].root_device_type = "instance-store"
-      end
-
-      it "does not tag volumes or wait for volumes to be ready" do
-        expect(driver).to_not receive(:tag_volumes).with(server)
-        expect(driver).to_not receive(:wait_until_volumes_ready).with(server, state)
-      end
-
-      after do
-        ec2_stub.images[0].root_device_type = "ebs"
       end
     end
 
@@ -711,6 +673,38 @@ describe Kitchen::Driver::Ec2 do
 
         include_examples "common create"
       end
+    end
+
+    context "and setting tags" do
+      let(:tag_spec) do
+        [
+          {
+            resource_type: "instance",
+            tags: [
+              { key: "string", value: "a_string" },
+              { key: "integer", value: 1 },
+            ],
+          },
+          {
+            resource_type: "volume",
+            tags: [
+              { key: "string", value: "a_string" },
+              { key: "integer", value: 1 },
+            ],
+          },
+        ]
+      end
+
+      before do
+        config[:tags] = {
+          "string" => "a_string",
+          "integer" => 1,
+        }
+        expect(generator).to receive(:ec2_instance_data).and_return({})
+        expect(client).to receive(:create_instance).with(max_count: 1, min_count: 1, tag_specifications: tag_spec).and_return(server)
+      end
+
+      include_examples "common create"
     end
   end
 
